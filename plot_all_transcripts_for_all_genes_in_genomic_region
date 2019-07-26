@@ -19,9 +19,8 @@ plot_all_transcripts_for_all_GENES_in_genomic_region <- function(
   
   region = GRanges(ranges)
   seqlevelsStyle(region) <- "ENSEMBL"
-  ## Get all the genes for the region of interest
-  # genes_in_region <- getGeneRegionTrackForGviz(x=ensembl_db, filter = GRangesFilter(region))
   
+  ## Get all the genes for the region of interest  
   genes_in_region =   
     genes(ensembl_db, columns = c("gene_id","symbol"),
           filter = AnnotationFilterList(
@@ -75,7 +74,7 @@ plot_all_transcripts_for_all_GENES_in_genomic_region <- function(
       foverlaps(o,t, type = "any", nomatch=0)
       #foverlaps(t,o, type = "any", nomatch=0)
     }
-  # make genes with overlapping ranges appear on different facets.
+  # make genes with overlapping ranges appear on different ggplot facets.
   second_facet = gene_ovs[,.N, by = symbol][N>1]$symbol
   gene_exons.dt.m[, facet := ifelse(symbol %in% second_facet, 1, 0)]
   
@@ -126,8 +125,7 @@ plot_all_transcripts_for_all_GENES_in_genomic_region <- function(
           axis.text.y = element_blank())+
     labs(x = paste0("Chromosome ",unique(gene_exons.dt$seqnames)), y = NULL)
   
-  
-  # ## tried to implement collapsed transcript models:
+  # ## tried to implement collapsed transcript models unsuccessfully:
   # collapsed_exons_by_gene.dt =
   #   foreach(gene=unique(gene_exons.dt$gene_id)) %do% {
   #     gene = unique(gene_exons.dt$gene_id)[1]
@@ -150,3 +148,6 @@ plot_all_transcripts_for_all_GENES_in_genomic_region <- function(
   return(list(plot,formatted_genes_exons.dt))
   
 }
+
+# Example usage: 
+# plot_all_transcripts_for_all_GENES_in_genomic_region(ensembl_db = edb, refseq2ensemblTx = refseq2ensemblTx, ranges = "chr11:32292883-32770482")
