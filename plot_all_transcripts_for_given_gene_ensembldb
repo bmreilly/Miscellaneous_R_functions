@@ -115,6 +115,8 @@ plot_all_transcripts_for_given_gene_ensembldb <- function(
   
 }
 
+# example usage:
+#   plot_all_transcripts_for_given_gene_ensembldb(ensembl_db = edb, refseq2ensemblTx = refseq2ensemblTx, gene="HBG2")
 
 
 
