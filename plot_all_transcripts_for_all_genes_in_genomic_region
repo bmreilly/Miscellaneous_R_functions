@@ -1,0 +1,152 @@
+
+plot_all_transcripts_for_all_GENES_in_genomic_region <- function(
+  ensembl_db,          # the name of the ensembldb object, e.g. "edb", usually defiend as: "edb = EnsDb.Hsapiens.v75::EnsDb.Hsapiens.v75" for GRCh37
+  refseq2ensemblTx,    # table w/ refseq mrna numbers "NM_0002333" mapped to their ensembl transcript IDs "ENST0000232332"
+                       # two table column: column 1 labelled "refseq_mrna" ; column 2 = "ensembl_transcript_id" 
+  ranges              # string in the form of "chr11:5200000-5700000" of the genomic region we want to plot.
+) {
+  require(ensembldb)
+  require(EnsDb.Hsapiens.v75)
+  require(data.table)
+  require(ggplot2)
+  require(foreach)
+  
+  # ensembl_db = edb
+  # refseq2ensemblTx = refseq2ensemblTx.dt
+  # only_refseq_matching=TRUE
+  # region = GRanges("chr11:5500000-5700000")
+  
+  
+  region = GRanges(ranges)
+  seqlevelsStyle(region) <- "ENSEMBL"
+  ## Get all the genes for the region of interest
+  # genes_in_region <- getGeneRegionTrackForGviz(x=ensembl_db, filter = GRangesFilter(region))
+  
+  genes_in_region =   
+    genes(ensembl_db, columns = c("gene_id","symbol"),
+          filter = AnnotationFilterList(
+            SeqNameFilter(c(1:22, "X", "Y")),
+            GeneIdFilter("ENSG", "startsWith"),
+            GRangesFilter(region)
+          ))
+  gene_exons = 
+    exonsBy(ensembl_db, by = "tx", columns = c("gene_id","symbol", "tx_id"),
+            filter = AnnotationFilterList(
+              SeqNameFilter(c(1:22, "X", "Y")),
+              GeneIdFilter("ENSG", "startsWith"),
+              #TxBiotypeFilter("protein_coding"),
+              GRangesFilter(region)))
+  
+  ## we want to always only include transcripts that have a REFSEQ transcript in addition to ENSEMBL
+  gene_exons = gene_exons[which(names(gene_exons) %in% refseq2ensemblTx[refseq_mrna != ""]$ensembl_transcript_id)]
+  
+  ## combine all transcripts/exons by gene_id into a single table
+  gene_exons.dt = 
+    foreach(tx=gene_exons, name=names(gene_exons), n=1:length(names(gene_exons)), 
+            .combine = "rbind" ) %do% {
+              txdt = as.data.table(tx)
+              txdt[, txid := name]
+              # txdt[, tx_rank := n*4]
+              txdt[, intron_length := data.table::shift(start,type="lead")-end, by = txid]
+              txdt[, tx_center := min(start)+((max(end)-min(start))/2), by = txid]
+              txdt[, tx_label := paste0(symbol, "; ",txid)]
+            }
+  gene_exons.dt.m = 
+    foreach(gene=unique(gene_exons.dt$gene_id), .combine = "rbind") %do% {
+      tmp = gene_exons.dt[gene_id == gene]  
+      if ( unique(tmp$strand)=="+" ) {
+        tmp[, gene_start := min(start)]
+        tmp[, gene_end := max(end)] } 
+      else if ( unique(tmp$strand)=="-" ) {
+        tmp[, gene_end := min(start)]
+        tmp[, gene_start := max(end)]
+      }
+    }
+  gene_exons.dt.m[, min_tx_start := min(start), by = gene_id]
+  gene_exons.dt.m[, max_tx_end := max(end), by = gene_id]
+  
+  gene_starts_and_ends = unique(gene_exons.dt.m[,.(seqnames,min_tx_start,max_tx_end,strand, gene_id,symbol)])
+  gene_ovs = 
+    foreach(gene=gene_starts_and_ends$gene_id,.combine="rbind") %do% {
+      o = gene_starts_and_ends[gene_id==gene]
+      t = gene_starts_and_ends[gene_id!=gene]
+      setkey(o,seqnames,min_tx_start,max_tx_end)
+      setkey(t,seqnames,min_tx_start,max_tx_end)
+      foverlaps(o,t, type = "any", nomatch=0)
+      #foverlaps(t,o, type = "any", nomatch=0)
+    }
+  # make genes with overlapping ranges appear on different facets.
+  second_facet = gene_ovs[,.N, by = symbol][N>1]$symbol
+  gene_exons.dt.m[, facet := ifelse(symbol %in% second_facet, 1, 0)]
+  
+  tx_ranks = 
+    foreach(gene=unique(gene_exons.dt.m$gene_id), 
+            .combine="rbind") %do% {
+              # gene=unique(gene_exons.dt.m[symbol=="TRIM6"]$gene_id)
+              tmp = unique(gene_exons.dt.m[gene_id==gene,.(gene_id,tx_id)])
+              tmp[,tx_rank := rowid(gene_id)*2]
+              tmp
+            }
+  formatted_genes_exons.dt = merge(gene_exons.dt.m, tx_ranks, by = c("gene_id","tx_id"))
+  
+  plot = ggplot()+
+    geom_rect(data = formatted_genes_exons.dt, 
+              aes(xmin = start, xmax = end, ymin = tx_rank - 0.5, ymax = tx_rank + 0.5),
+              color = "navy", fill = "navy")+
+    geom_segment(data = formatted_genes_exons.dt, aes(x = end, xend = end + intron_length, y = tx_rank, yend = tx_rank),
+                 color = "navy")+
+    # add tx arrow
+    # segment first
+    geom_segment(data = unique(formatted_genes_exons.dt[, .(x = ifelse(strand=="+",min(start),max(end)), y_start = tx_rank, y_end = tx_rank + 1 ), by = .(tx_label,facet)]), 
+                 aes(x = x, xend = x, y = y_start, yend = y_end),
+                 color = "navy",size = 0.5)+
+    # now arrow.
+    geom_segment(data = unique(formatted_genes_exons.dt[, .(x_start = ifelse(strand=="+",min(start),max(end)), 
+                                                            x_end = ifelse(strand=="+",
+                                                                           min(start) + (max(formatted_genes_exons.dt$end)-min(formatted_genes_exons.dt$start))/90, 
+                                                                           max(end) - (max(formatted_genes_exons.dt$end)-min(formatted_genes_exons.dt$start))/90 ), 
+                                                            y = tx_rank+1 ),
+                                                        by=.(gene_id,tx_id,facet)]),
+                 aes(x = x_start, xend = x_end, y = y, yend = y),
+                 color = "navy", size = 0.5, arrow = arrow(length = unit(4, "pt"), type = "closed"))+
+    geom_text(data = unique(formatted_genes_exons.dt[,.(tx_center,tx_rank,tx_label=symbol,facet)]), aes(x = tx_center, y = tx_rank + 0.9, label = tx_label),
+              family = "Helvetica", fontface = "plain", size = 8 * 0.35)+
+    scale_x_continuous(limits = c(start(region),end(region)))+
+    theme_minimal()+
+    facet_grid(facet~., scales = "free",space="free")+
+    # scale_y_continuous(breaks = seq(from = 4, to = max(formatted_genes_exons.dt$tx_rank), by = 4), labels = NULL)+
+    theme(axis.text = element_text(color = "black"),
+          axis.ticks.y = element_blank(),
+          panel.spacing = unit(0,"lines"),
+          panel.grid = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_blank(),
+          axis.line.x = element_line(color="black"),
+          axis.ticks.x = element_line(),
+          axis.text.y = element_blank())+
+    labs(x = paste0("Chromosome ",unique(gene_exons.dt$seqnames)), y = NULL)
+  
+  
+  # ## tried to implement collapsed transcript models:
+  # collapsed_exons_by_gene.dt =
+  #   foreach(gene=unique(gene_exons.dt$gene_id)) %do% {
+  #     gene = unique(gene_exons.dt$gene_id)[1]
+  #     tmp = gene_exons.dt[gene_id == gene]
+  #     txlist = foreach(tx=unique(tmp$tx_id)) %do% {
+  #       tm = tmp[tx_id==tx]
+  #       setkey(tm, seqnames,start,end)
+  #     }
+  #     # gives the overlaps
+  #     one = foverlaps(txlist[[1]][,.(seqnames,start,end,width,strand,gene_id,tx_id,exon_id,exon_rank)],
+  #                     txlist[[2]][,.(seqnames,start,end,width,strand,gene_id,tx_id,exon_id,exon_rank)],
+  #                     type = "any",mult = "all")
+  #     two = foverlaps(txlist[[2]][,.(seqnames,start,end,width,strand,gene_id,tx_id,exon_id,exon_rank)],
+  #                     txlist[[1]][,.(seqnames,start,end,width,strand,gene_id,tx_id,exon_id,exon_rank)],
+  #                     type = "any",mult = "all")
+  #     merge(one,two, by = c())
+  #     
+  #     # we want genes with overlapping ranges 
+  #   }
+  return(list(plot,formatted_genes_exons.dt))
+  
+}
