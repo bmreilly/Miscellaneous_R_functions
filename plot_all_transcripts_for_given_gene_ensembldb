@@ -1,0 +1,120 @@
+
+# for making gene model plots.
+plot_all_transcripts_for_given_gene_ensembldb <- function(
+  ensembl_db,                     # ensembl_db , usually called as: "edb = EnsDb.Hsapiens.v75::EnsDb.Hsapiens.v75" for GRCh37
+  refseq2ensemblTx,               # table w/ refseq mrna numbers "NM_0002333" mapped to their ensembl transcript IDs "ENST0000232332"
+                                  # two table column: column 1 labelled "refseq_mrna" ; column 2 = "ensembl_transcript_id"
+  only_refseq_matching=TRUE,      # if we want to plot only the transcripts from ensembl which also appear in refseq. -- cuts down the number of isoforms
+  gene,                           # gene symbol e.g. "GATA1"
+  gene_flank_bp=10000             # how large of a flanking region to plot around the gene (in base-pairs)
+  ){
+  require(ensembldb)
+  require(EnsDb.Hsapiens.v75)
+  require(data.table)
+  require(foreach)
+  require(ggplot2)
+  
+  # ensembl_db; ensembl database i.e. edb=EnsDb.Hsapiens.v75
+  # refseq2ensemblTx =  2 column table: COL1="refseq_mrna" i.e. "NM_9234524", COL2="ensembl_transcript_id" i.e. "ENST0000452462"
+  # only_refseq_matching=TRUE; means only plot the ensembl transcripts that also have a refseq entry
+  # gene_flank_bp=1000; how many base pairs to include on flank of gene when plotting.
+  
+  # ensembl_db = edb
+  # refseq2ensemblTx = refseq2ensemblTx.dt
+  # only_refseq_matching=TRUE
+  # gene = "WT1"
+  # gene_flank_bp=10000
+  # strand = "+"
+  
+  # get the location of
+  gene_coords =   
+    genes(ensembl_db, columns = c("gene_id","symbol"),
+      filter = AnnotationFilterList(
+                      SeqNameFilter(c(1:22, "X", "Y")),
+                      GeneIdFilter("ENSG", "startsWith"),
+                      GenenameFilter(gene)
+                      ))+gene_flank_bp
+  gene_exons = 
+    exonsBy(ensembl_db, by = "tx", filter = AnnotationFilterList(
+      SeqNameFilter(c(1:22, "X", "Y")),
+      GeneIdFilter("ENSG", "startsWith"),
+      #TxBiotypeFilter("protein_coding"),
+      GenenameFilter(gene)))
+  
+  if(only_refseq_matching==TRUE) {
+    gene_exons = gene_exons[which(names(gene_exons) %in% refseq2ensemblTx[refseq_mrna != ""]$ensembl_transcript_id)]
+  }
+  
+  gene_exons.dt = 
+    foreach(tx=gene_exons, name=names(gene_exons), n=1:length(names(gene_exons)), 
+            .combine = "rbind" ) %do% {
+              txdt = as.data.table(tx)
+              txdt[, txid := name]
+              txdt[, tx_rank := n*4]
+              txdt[, intron_length := data.table::shift(start,type="lead")-end, by = txid]
+              txdt[, tx_center := min(start)+((max(end)-min(start))/2), by = txid]
+              txdt[, tx_label := paste0(gene_name, "; ",txid)]
+            }
+  
+  if ( unique(gene_exons.dt$strand)=="+" ) {
+    gene_exons.dt[, gene_start := min(start)]
+    gene_exons.dt[, gene_end := max(end)]
+    
+    ggplot()+
+      geom_rect(data = gene_exons.dt, 
+                aes(xmin = start, xmax = end, ymin = tx_rank-0.5, ymax = tx_rank+0.5),
+                color = "navy", fill = "navy")+
+      geom_segment(data = gene_exons.dt, 
+                   aes(x = end, xend = end + intron_length, y = tx_rank, yend = tx_rank),
+                   color = "navy")+
+      # add tx arrow
+      geom_segment(data = unique(gene_exons.dt[, .(x = min(start), y_start = tx_rank, y_end=tx_rank+1 ),by=tx_label]), 
+                   aes(x = x, xend = x, y = y_start, yend = y_end),
+                   color = "navy", size=0.5)+
+      geom_segment(data = unique(gene_exons.dt[, .(x_start = min(start), x_end = min(start) + ((gene_end-gene_start)/60)  ,y = tx_rank+1 ),by=tx_label]),
+                   aes(x = x_start, xend = x_end, y = y, yend = y),
+                   color = "navy", size=0.5, arrow = arrow(length = unit(4, "pt"), type = "closed"))+
+      geom_label(data = unique(gene_exons.dt[,.(tx_center,tx_rank,tx_label)]), aes(x = tx_center, y = tx_rank + 2, label = tx_label),
+                 family = "Helvetica", fontface = "plain", size = 8 * 0.35, label.padding = unit(2, "pt"))+
+      theme_bw()+
+      scale_y_continuous(breaks = seq(from = 4, to = max(gene_exons.dt$tx_rank), by = 4), labels = NULL)+
+      scale_x_continuous(limits = c(min(ranges(gene_coords)@start), 
+                                    min(ranges(gene_coords)@start) + max(ranges(gene_coords)@width)))+
+      theme(axis.text=element_text(color = "black"),
+            axis.ticks.y = element_blank())+
+      labs(x=paste0("Chromosome ",unique(gene_exons.dt$seqnames)), y=NULL)
+  } else if ( unique(gene_exons.dt$strand)=="-" ) {
+    gene_exons.dt[, gene_end := min(start)]
+    gene_exons.dt[, gene_start := max(end)]
+    
+    ggplot()+
+      geom_rect(data = gene_exons.dt, 
+                aes(xmin = start, xmax = end, ymin = tx_rank - 0.5, ymax = tx_rank + 0.5),
+                color = "navy", fill = "navy")+
+      geom_segment(data = gene_exons.dt, aes(x = end, xend = end + intron_length, y = tx_rank, yend = tx_rank),
+                   color = "navy")+
+      # add tx arrow
+      geom_segment(data = unique(gene_exons.dt[, .(x = max(end), y_start = tx_rank, y_end = tx_rank + 1 ), by = tx_label]), 
+                   aes(x = x, xend = x, y = y_start, yend = y_end),
+                   color = "navy",size = 0.5)+
+      geom_segment(data = unique(gene_exons.dt[, .(x_start = max(end), x_end = max(end) - ((gene_start-gene_end)/60)  ,y = tx_rank+1 ),by=tx_label]),
+                   aes(x = x_start, xend = x_end, y = y, yend = y),
+                   color = "navy", size = 0.5, arrow = arrow(length = unit(4, "pt"), type = "closed"))+
+      geom_label(data = unique(gene_exons.dt[,.(tx_center,tx_rank,tx_label)]), aes(x = tx_center, y = tx_rank + 2, label = tx_label),
+                 family = "Helvetica", fontface = "plain", size = 8 * 0.35, label.padding = unit(2, "pt"))+
+      theme_bw()+
+      scale_y_continuous(breaks = seq(from = 4, to = max(gene_exons.dt$tx_rank), by = 4), labels = NULL)+
+      scale_x_continuous(limits = c(min(ranges(gene_coords)@start), 
+                                    min(ranges(gene_coords)@start) + max(ranges(gene_coords)@width)))+
+      theme(axis.text = element_text(color = "black"),
+            axis.ticks.y = element_blank())+
+      labs(x = paste0("Chromosome ",unique(gene_exons.dt$seqnames)), y = NULL)
+  } else {
+    print("No strand indicated. Strand must either equal '+' or '-'")
+  }
+  
+}
+
+
+
+
