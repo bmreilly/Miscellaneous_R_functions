@@ -1,3 +1,18 @@
+# # get REFSEQ to ENSEMBL transcript mappings. (refseq2ensemblTx table)
+# library(biomaRt)
+# # find version 75 of DB
+# listEnsemblArchives()
+# # Find database name for grch37
+# listMarts(host = "http://Feb2014.archive.ensembl.org")
+# # establish connection to database
+# ensembl_75_GRCh37 = useMart(host = "http://Feb2014.archive.ensembl.org",
+#                             biomart = "ENSEMBL_MART_ENSEMBL",
+#                             dataset="hsapiens_gene_ensembl")
+# # list attributes of database that we can access
+# listAttributes(ensembl_75_GRCh37)
+# refseq2ensemblTx = getBM(attributes = c("refseq_mrna", "ensembl_transcript_id"), mart = ensembl_75_GRCh37)
+# refseq2ensemblTx.dt = as.data.table(refseq2ensemblTx)
+
 
 plot_all_transcripts_for_all_GENES_in_genomic_region <- function(
   ensembl_db,          # the name of the ensembldb object, e.g. "edb", usually defiend as: "edb = EnsDb.Hsapiens.v75::EnsDb.Hsapiens.v75" for GRCh37
